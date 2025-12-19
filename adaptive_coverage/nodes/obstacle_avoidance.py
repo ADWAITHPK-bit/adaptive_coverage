@@ -7,10 +7,10 @@ from sensor_msgs.msg import LaserScan
 
 
 class ObstacleAvoidance(Node):
-
     def __init__(self):
         super().__init__('obstacle_avoidance')
 
+        # Subscriber to LiDAR
         self.sub = self.create_subscription(
             LaserScan,
             '/scan',
@@ -18,48 +18,72 @@ class ObstacleAvoidance(Node):
             10
         )
 
+        # Publisher to cmd_vel
         self.pub = self.create_publisher(
             Twist,
             '/cmd_vel',
             10
         )
 
+        # Initialize distances
         self.front_distance = float('inf')
+        self.left_distance = float('inf')
+        self.right_distance = float('inf')
 
+        # Control loop timer
         self.timer = self.create_timer(0.1, self.control_loop)
 
         self.get_logger().info("Obstacle Avoidance Node Started")
 
     def scan_callback(self, msg):
-        
-    # Divide laser scan into left, front, right
-        center = len(msg.ranges) // 2
-        side_angles = 15  # points to consider
+        # Parameters
+        window_size = 10  # number of laser points to consider for front/side
+        min_range = 0.05  # ignore too close readings (robot bumper)
+        max_range = 10.0  # ignore too far readings
 
-        left_ranges = msg.ranges[center+1:center+1+side_angles]
-        right_ranges = msg.ranges[center-side_angles:center]
+        total_points = len(msg.ranges)
+        center = total_points // 2
 
-    # Filter invalid measurements
-        left = min([r for r in left_ranges if r > 0.0], default=float('inf'))
-        right = min([r for r in right_ranges if r > 0.0], default=float('inf'))
+        # Front slice
+        front_ranges = msg.ranges[center - window_size : center + window_size + 1]
+        front_ranges = [r for r in front_ranges if min_range < r < max_range]
+        self.front_distance = min(front_ranges, default=float('inf'))
 
-        self.front_distance = min([msg.ranges[center], 1.0])  # limit front distance
-        self.left_distance = left
-        self.right_distance = right
+        # Left slice
+        left_ranges = msg.ranges[center + 1 : center + 1 + window_size]
+        left_ranges = [r for r in left_ranges if min_range < r < max_range]
+        self.left_distance = min(left_ranges, default=float('inf'))
+
+        # Right slice
+        right_ranges = msg.ranges[center - window_size : center]
+        right_ranges = [r for r in right_ranges if min_range < r < max_range]
+        self.right_distance = min(right_ranges, default=float('inf'))
+
+        # Debug info
+        self.get_logger().info(
+            f"Front: {self.front_distance:.2f} | Left: {self.left_distance:.2f} | Right: {self.right_distance:.2f}"
+        )
 
     def control_loop(self):
         cmd = Twist()
-        if self.front_distance < 0.5:
+        safe_distance = 0.5  
+
+        if self.front_distance < safe_distance:
+            
             cmd.linear.x = 0.0
-        # Turn toward the side with more space
+
+            
             if self.left_distance > self.right_distance:
-                cmd.angular.z = 0.5  # turn left
+                cmd.angular.z = 0.5  
             else:
-                cmd.angular.z = -0.5  # turn right
+                cmd.angular.z = -0.5  
         else:
-            cmd.linear.x = 0.1
+            
+            cmd.linear.x = 0.2
             cmd.angular.z = 0.0
+
         self.pub.publish(cmd)
+
 
 def main(args=None):
     rclpy.init(args=args)
